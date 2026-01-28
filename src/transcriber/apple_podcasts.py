@@ -182,6 +182,34 @@ def get_ttml_path(episode: AppleEpisodeInfo) -> Optional[Path]:
     return None
 
 
+def get_or_fetch_ttml_path(episode: AppleEpisodeInfo) -> Optional[Path]:
+    """
+    Get cached TTML path, or fetch from Apple's API if not cached.
+
+    This attempts to download the transcript using the FetchTranscript helper
+    tool if the transcript is not already cached locally.
+
+    Returns None if transcript cannot be obtained.
+    """
+    # First check if already cached
+    ttml_path = get_ttml_path(episode)
+    if ttml_path:
+        return ttml_path
+
+    # Try to fetch via API
+    if episode.store_track_id:
+        from .transcript_fetcher import fetch_transcript_for_episode
+
+        fetched_path = fetch_transcript_for_episode(
+            episode.store_track_id,
+            episode.transcript_identifier,
+        )
+        if fetched_path:
+            return fetched_path
+
+    return None
+
+
 def list_cached_transcripts() -> list[tuple[Path, Optional[AppleEpisodeInfo]]]:
     """
     List all locally cached TTML transcripts with their episode info.
@@ -245,11 +273,16 @@ def _find_episode_by_transcript_path(transcript_path: str) -> Optional[AppleEpis
         return None
 
 
-def resolve_apple_url(url: str) -> ResolvedInput:
+def resolve_apple_url(url: str, fetch_transcript: bool = True) -> ResolvedInput:
     """
     Resolve Apple Podcasts URL to transcript or audio.
 
-    Checks local cache for TTML transcript, falls back to audio URL.
+    Checks local cache for TTML transcript, optionally fetches from API,
+    falls back to audio URL.
+
+    Args:
+        url: Apple Podcasts URL
+        fetch_transcript: If True, attempt to fetch transcript from API if not cached
     """
     podcast_id, episode_id, show_slug = parse_apple_url(url)
 
@@ -268,8 +301,11 @@ def resolve_apple_url(url: str) -> ResolvedInput:
             episode_id=episode_id,
         )
 
-    # Check for cached TTML transcript
-    ttml_path = get_ttml_path(episode)
+    # Check for cached TTML transcript, optionally fetch if not cached
+    if fetch_transcript:
+        ttml_path = get_or_fetch_ttml_path(episode)
+    else:
+        ttml_path = get_ttml_path(episode)
 
     return ResolvedInput(
         input_type=InputType.APPLE_PODCASTS_URL,

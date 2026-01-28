@@ -68,7 +68,6 @@ python -m src.transcriber.server
 - Word-level spans with `podcasts:unit="word"` attribute
 
 ### Important Notes
-- TTML files only cached when user has viewed transcript in Podcasts app
 - `ZTRANSCRIPTIDENTIFIER` exists even when file not cached (it's a remote path)
 - Open database in read-only mode (`?mode=ro`) to avoid locking issues
 - Overcast URLs can be resolved by searching Apple Podcasts by episode title
@@ -76,3 +75,19 @@ python -m src.transcriber.server
 ### URL Patterns
 - Apple Podcasts: `podcasts.apple.com/{country}/podcast/{show-slug}/id{podcast_id}?i={episode_id}`
 - Overcast: `overcast.fm/+{episode_id}`
+
+### Transcript Fetcher (tools/FetchTranscript)
+Native macOS tool that fetches transcripts directly from Apple's API:
+- Requires macOS 15.5+ (uses private AppleMediaServices framework)
+- Build with: `./tools/build.sh`
+- Authenticates via Apple's token service and signed requests
+- Bearer token cached for 30 days in `tools/bearer_token.txt`
+- Downloads TTML to Apple's cache directory structure
+
+**API Endpoint:**
+```
+https://amp-api.podcasts.apple.com/v1/catalog/us/podcast-episodes/{episodeId}/transcripts
+```
+
+**Usage:** The Python wrapper (`transcript_fetcher.py`) automatically calls this tool when
+a transcript is not cached locally. Falls back to speech-to-text if fetching fails.

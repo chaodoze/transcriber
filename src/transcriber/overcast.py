@@ -117,13 +117,13 @@ def resolve_overcast_url(url: str) -> ResolvedInput:
     if episode_title:
         apple_episode = search_episode_by_title(episode_title, podcast_title)
 
-    # Check for cached transcript
+    # Check for cached transcript, or fetch from API if not cached
     transcript_path = None
     apple_audio_url = None
     if apple_episode:
-        from .apple_podcasts import get_ttml_path
+        from .apple_podcasts import get_or_fetch_ttml_path
 
-        transcript_path = get_ttml_path(apple_episode)
+        transcript_path = get_or_fetch_ttml_path(apple_episode)
         apple_audio_url = apple_episode.audio_url
 
     # Extract audio URL from Overcast as fallback
