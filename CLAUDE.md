@@ -91,3 +91,11 @@ https://amp-api.podcasts.apple.com/v1/catalog/us/podcast-episodes/{episodeId}/tr
 
 **Usage:** The Python wrapper (`transcript_fetcher.py`) automatically calls this tool when
 a transcript is not cached locally. Falls back to speech-to-text if fetching fails.
+
+### iTunes Search API (itunes_api.py)
+Enables transcript fetching for ANY podcast episode without local subscription:
+- Search endpoint: `https://itunes.apple.com/search?term={query}&entity=podcastEpisode`
+- Lookup endpoint: `https://itunes.apple.com/lookup?id={trackId}&entity=podcastEpisode`
+- Returns `trackId` (Apple episode ID) needed for transcript fetching
+- Used as fallback when episode not in local Apple Podcasts database
+- Overcast URL workflow: parse title from page → search iTunes → fetch transcript
