@@ -47,3 +47,32 @@ python -m src.transcriber.server
 - Transcription: ~8.5 minutes
 - Diarization: ~10 minutes
 - Total: ~20 minutes for full pipeline
+
+## Apple Podcasts Transcript Extraction
+
+### Data Locations (macOS)
+- **SQLite Database**: `~/Library/Group Containers/243LU875E5.groups.com.apple.podcasts/Documents/MTLibrary.sqlite`
+- **TTML Cache**: `~/Library/Group Containers/243LU875E5.groups.com.apple.podcasts/Library/Cache/Assets/TTML/`
+
+### Database Schema (ZMTEPISODE table)
+- `ZSTORETRACKID` - iTunes episode ID (matches Apple URL `?i=` parameter)
+- `ZTITLE` - Episode title
+- `ZTRANSCRIPTIDENTIFIER` - Relative path to TTML file (if transcript available)
+- `ZENCLOSUREURL` - Direct audio URL (for fallback transcription)
+- `ZPODCAST` - Foreign key to ZMTPODCAST table
+
+### TTML Format
+- Namespaces: `http://www.w3.org/ns/ttml`, `http://www.w3.org/ns/ttml#metadata`
+- Speakers in `ttm:agent` attribute (e.g., "SPEAKER_1")
+- Timestamps in `begin`/`end` attributes (formats: "0.860", "1:48.737", "1:02:03.456")
+- Word-level spans with `podcasts:unit="word"` attribute
+
+### Important Notes
+- TTML files only cached when user has viewed transcript in Podcasts app
+- `ZTRANSCRIPTIDENTIFIER` exists even when file not cached (it's a remote path)
+- Open database in read-only mode (`?mode=ro`) to avoid locking issues
+- Overcast URLs can be resolved by searching Apple Podcasts by episode title
+
+### URL Patterns
+- Apple Podcasts: `podcasts.apple.com/{country}/podcast/{show-slug}/id{podcast_id}?i={episode_id}`
+- Overcast: `overcast.fm/+{episode_id}`
