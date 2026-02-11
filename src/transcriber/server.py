@@ -12,24 +12,34 @@ from .diarize import (
     diarize_audio,
     merge_speaker_segments,
 )
-from .models import QuickTranscriptResult, Segment, TranscriptResult, TranscriptSource
+from .models import (
+    EbookChapterResult,
+    EbookTocResult,
+    QuickTranscriptResult,
+    Segment,
+    TranscriptResult,
+    TranscriptSource,
+)
 from .postprocess import process_transcript
 from .transcribe import get_word_segments, transcribe_audio
 from .ttml_parser import parse_ttml_file
-from .url_resolver import resolve_input
+from .url_resolver import InputType, resolve_input
 
 # Initialize MCP server
 mcp = FastMCP(
     name="Podcast Transcriber",
     instructions="""
     Transcribe podcasts and audio files with speaker diarization.
+    Read EPUB ebooks chapter by chapter.
 
     Tools:
-    - transcribe_url: Transcribe from Apple Podcasts URL, Overcast URL, or file path
+    - transcribe_url: Transcribe from Apple Podcasts URL, Overcast URL, YouTube URL, or file path
       (uses cached transcripts when available, falls back to speech-to-text)
     - transcribe_podcast: Full transcription with speaker diarization from audio file
     - transcribe_quick: Fast transcription without diarization
     - export_transcript: Export to SRT, VTT, or text format
+    - ebook_toc: Get table of contents from an EPUB file (use first to see chapters)
+    - ebook_chapter: Read a specific chapter by number, index, or title
     """,
 )
 
@@ -104,7 +114,7 @@ def _transcribe_audio_file(
 @mcp.tool
 def transcribe_url(
     url_or_path: str = Field(
-        description="Apple Podcasts URL, Overcast URL, or local file path"
+        description="Apple Podcasts URL, Overcast URL, YouTube URL, or local file path"
     ),
     language: str = Field(default="en", description="Language code (e.g., 'en', 'es', 'fr')"),
     remove_fillers: bool = Field(default=True, description="Remove filler words (um, uh, etc.)"),
@@ -121,9 +131,10 @@ def transcribe_url(
     Supports:
     - Apple Podcasts URLs: Uses cached transcript if available, falls back to STT
     - Overcast URLs: Looks up in Apple Podcasts cache, falls back to STT
+    - YouTube URLs: Uses YouTube captions if available, falls back to STT
     - Local file paths: Direct transcription
 
-    The tool automatically uses cached Apple Podcasts transcripts when available,
+    The tool automatically uses cached transcripts/captions when available,
     which is much faster than speech-to-text transcription.
 
     Returns structured transcript with speaker diarization.
@@ -139,19 +150,35 @@ def transcribe_url(
         result.podcast_title = resolved.podcast_title
         return result
 
+    # For YouTube URLs, try captions first (fast path)
+    if resolved.input_type == InputType.YOUTUBE_URL and not force_transcribe:
+        from .youtube import get_youtube_captions
+
+        caption_result = get_youtube_captions(resolved.episode_id, language)
+        if caption_result:
+            caption_result.episode_title = resolved.episode_title
+            caption_result.podcast_title = resolved.podcast_title
+            return caption_result
+
     # Otherwise, we need to transcribe audio
     audio_path = resolved.audio_path
     temp_audio = None
 
     if not audio_path:
-        # Need to download audio from URL
-        if not resolved.audio_url:
+        # For YouTube, download audio via yt-dlp
+        if resolved.input_type == InputType.YOUTUBE_URL:
+            from .youtube import download_youtube_audio
+
+            audio_path = download_youtube_audio(resolved.episode_id)
+            temp_audio = audio_path
+        elif not resolved.audio_url:
             raise ValueError(
                 f"Could not find audio source for: {url_or_path}. "
                 "Episode may not be downloaded in Apple Podcasts."
             )
-        audio_path = _download_audio(resolved.audio_url)
-        temp_audio = audio_path
+        else:
+            audio_path = _download_audio(resolved.audio_url)
+            temp_audio = audio_path
 
     try:
         if not audio_path.exists():
@@ -255,9 +282,7 @@ def transcribe_quick(
 @mcp.tool
 def export_transcript(
     transcript: dict = Field(description="Transcript result from transcribe_podcast"),
-    format: str = Field(
-        default="txt", description="Output format: 'txt', 'srt', or 'vtt'"
-    ),
+    format: str = Field(default="txt", description="Output format: 'txt', 'srt', or 'vtt'"),
 ) -> str:
     """
     Export transcript to different formats.
@@ -329,6 +354,41 @@ def _export_vtt(segments: list) -> str:
         text = seg.get("text", "")
         lines.append(f"{i}\n{start} --> {end}\n<v {speaker}>{text}")
     return "\n\n".join(lines)
+
+
+@mcp.tool
+def ebook_toc(
+    file_path: str = Field(description="Path to an EPUB file"),
+) -> EbookTocResult:
+    """
+    Get the table of contents of an EPUB ebook.
+
+    Use this first to see the book's structure, then use ebook_chapter
+    to read a specific chapter by its number, index, or title.
+    """
+    from .ebook import get_toc
+
+    return get_toc(file_path)
+
+
+@mcp.tool
+def ebook_chapter(
+    file_path: str = Field(description="Path to an EPUB file"),
+    chapter: str = Field(
+        description=(
+            "Chapter to read. Can be a hierarchical number (e.g., '3.1'), "
+            "an index (e.g., '0'), or a title substring (e.g., 'Introduction')"
+        )
+    ),
+) -> EbookChapterResult:
+    """
+    Read a specific chapter from an EPUB ebook.
+
+    Use ebook_toc first to see available chapters and their numbers/indices.
+    """
+    from .ebook import get_chapter
+
+    return get_chapter(file_path, chapter)
 
 
 def main():

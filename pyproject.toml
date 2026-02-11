@@ -3,7 +3,7 @@ name = "transcriber"
 version = "0.1.0"
 description = "MCP server for podcast transcription with speaker diarization"
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10"
 dependencies = [
     "mlx-whisper>=0.4",
     "pyannote-audio>=3.1",
@@ -11,6 +11,11 @@ dependencies = [
     "torch>=2.0",
     "torchaudio>=2.0",
     "pydantic>=2.0",
+    "youtube-transcript-api>=1.0",
+    "yt-dlp>=2024.0",
+    "ebooklib>=0.18",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
 ]
 
 [project.optional-dependencies]
