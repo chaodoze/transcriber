@@ -12,6 +12,7 @@ class InputType(Enum):
 
     APPLE_PODCASTS_URL = "apple_podcasts"
     OVERCAST_URL = "overcast"
+    YOUTUBE_URL = "youtube"
     FILE_PATH = "file_path"
 
 
@@ -37,6 +38,11 @@ APPLE_PODCASTS_PATTERN = re.compile(
 
 OVERCAST_PATTERN = re.compile(r"overcast\.fm/\+(?P<episode_id>[a-zA-Z0-9_-]+)")
 
+YOUTUBE_PATTERN = re.compile(
+    r"(?:youtube\.com/watch\?.*v=|youtu\.be/|youtube\.com/embed/)"
+    r"(?P<video_id>[a-zA-Z0-9_-]{11})"
+)
+
 
 def detect_input_type(url_or_path: str) -> InputType:
     """Detect whether input is Apple Podcasts URL, Overcast URL, or file path."""
@@ -47,6 +53,9 @@ def detect_input_type(url_or_path: str) -> InputType:
 
     if OVERCAST_PATTERN.search(url_or_path):
         return InputType.OVERCAST_URL
+
+    if YOUTUBE_PATTERN.search(url_or_path):
+        return InputType.YOUTUBE_URL
 
     return InputType.FILE_PATH
 
@@ -77,6 +86,14 @@ def parse_overcast_url(url: str) -> Optional[str]:
     return match.group("episode_id")
 
 
+def parse_youtube_url(url: str) -> Optional[str]:
+    """Parse YouTube URL and return video ID."""
+    match = YOUTUBE_PATTERN.search(url)
+    if not match:
+        return None
+    return match.group("video_id")
+
+
 def resolve_input(url_or_path: str) -> ResolvedInput:
     """
     Resolve input to audio/transcript paths.
@@ -103,5 +120,10 @@ def resolve_input(url_or_path: str) -> ResolvedInput:
         from .overcast import resolve_overcast_url
 
         return resolve_overcast_url(url_or_path)
+
+    if input_type == InputType.YOUTUBE_URL:
+        from .youtube import resolve_youtube_url
+
+        return resolve_youtube_url(url_or_path)
 
     return ResolvedInput(input_type=input_type)
