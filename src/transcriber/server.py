@@ -416,7 +416,7 @@ def main():
         from starlette.responses import JSONResponse
 
         request_times: deque[float] = deque()
-        max_requests_per_hour = 50
+        max_requests_per_hour = 1000
 
         class RateLimitMiddleware:
             def __init__(self, app):
