@@ -37,13 +37,35 @@ MCP server for podcast transcription with speaker diarization and EPUB ebook rea
 ## Environment Variables
 - `HF_TOKEN`: HuggingFace token for pyannote models (required)
 - `WHISPER_MODEL`: Override default model (optional)
+- `MCP_HOST`: Bind address for HTTP transport (default: `0.0.0.0`)
 
 ## Running the Server
+
+### Local (stdio) — default
 ```bash
 source .venv/bin/activate
 export HF_TOKEN="your_token_here"
 python -m src.transcriber.server
 ```
+
+### Remote (Streamable HTTP)
+```bash
+source .venv/bin/activate
+export HF_TOKEN="your_token_here"
+python -m src.transcriber.server --http         # port 51205 (default)
+python -m src.transcriber.server --http 9000    # custom port
+```
+Endpoint: `https://transcriber.numtot.org/mcp` via Cloudflare Tunnel.
+Rate-limited to 50 requests/hour (429 beyond that).
+
+### LaunchAgents (auto-start on boot)
+- `com.transcriber.mcp` — MCP server on localhost:51205
+- `com.transcriber.tunnel` — Cloudflare tunnel → `transcriber.numtot.org`
+
+Logs: `~/Library/Logs/transcriber-mcp.log`, `~/Library/Logs/transcriber-tunnel.log`
+
+### Claude iOS
+Add as Custom Connector on claude.ai: Settings > Connectors > Add custom connector > `https://transcriber.numtot.org/mcp`
 
 ## Performance (64-min podcast, M-series Mac)
 - Transcription: ~8.5 minutes

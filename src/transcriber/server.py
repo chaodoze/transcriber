@@ -1,6 +1,10 @@
 """MCP server for podcast transcription."""
 
+import os
+import sys
 import tempfile
+import time
+from collections import deque
 from pathlib import Path
 from urllib.request import urlretrieve
 
@@ -392,8 +396,56 @@ def ebook_chapter(
 
 
 def main():
-    """Run the MCP server."""
-    mcp.run()
+    """Run the MCP server.
+
+    Usage:
+        python -m src.transcriber.server              # stdio (default, for local MCP)
+        python -m src.transcriber.server --http        # Streamable HTTP on port 8000
+        python -m src.transcriber.server --http 9000   # Custom port
+
+    Set MCP_API_KEY to require bearer token auth (optional, for non-private networks).
+    """
+    args = sys.argv[1:]
+
+    if "--http" in args:
+        idx = args.index("--http")
+        port = int(args[idx + 1]) if idx + 1 < len(args) and args[idx + 1].isdigit() else 51205
+        host = os.environ.get("MCP_HOST", "0.0.0.0")
+
+        from starlette.middleware import Middleware
+        from starlette.responses import JSONResponse
+
+        request_times: deque[float] = deque()
+        max_requests_per_hour = 50
+
+        class RateLimitMiddleware:
+            def __init__(self, app):
+                self.app = app
+
+            async def __call__(self, scope, receive, send):
+                if scope["type"] == "http":
+                    now = time.time()
+                    cutoff = now - 3600
+                    while request_times and request_times[0] < cutoff:
+                        request_times.popleft()
+                    if len(request_times) >= max_requests_per_hour:
+                        resp = JSONResponse(
+                            {"error": "Server overloaded. Try again later."}, status_code=429
+                        )
+                        await resp(scope, receive, send)
+                        return
+                    request_times.append(now)
+                await self.app(scope, receive, send)
+
+        middleware = [Middleware(RateLimitMiddleware)]
+
+        print(
+            f"Starting Streamable HTTP server on {host}:{port}/mcp"
+            f" (rate limit: {max_requests_per_hour}/hr)"
+        )
+        mcp.run(transport="streamable-http", host=host, port=port, middleware=middleware)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":
