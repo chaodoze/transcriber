@@ -115,6 +115,26 @@ def _transcribe_audio_file(
     )
 
 
+def _filter_segments_by_time(
+    result: TranscriptResult, start_min: float, end_min: float
+) -> TranscriptResult:
+    """Filter transcript segments to a time range (in minutes)."""
+    start_sec = start_min * 60
+    end_sec = end_min * 60
+    filtered = [s for s in result.segments if s.end > start_sec and s.start < end_sec]
+    speakers = list(dict.fromkeys(s.speaker for s in filtered))
+    duration = filtered[-1].end - filtered[0].start if filtered else 0.0
+    return TranscriptResult(
+        segments=filtered,
+        speakers=speakers,
+        duration=duration,
+        language=result.language,
+        source=result.source,
+        episode_title=result.episode_title,
+        podcast_title=result.podcast_title,
+    )
+
+
 @mcp.tool
 def transcribe_url(
     url_or_path: str = Field(
@@ -127,6 +147,12 @@ def transcribe_url(
     ),
     force_transcribe: bool = Field(
         default=False, description="Force speech-to-text even if cached transcript available"
+    ),
+    start_minutes: float = Field(
+        default=0, description="Start time in minutes (default: 0, beginning)"
+    ),
+    end_minutes: float = Field(
+        default=0, description="End time in minutes (default: 0, meaning entire transcript)"
     ),
 ) -> TranscriptResult:
     """
@@ -141,18 +167,27 @@ def transcribe_url(
     The tool automatically uses cached transcripts/captions when available,
     which is much faster than speech-to-text transcription.
 
+    Use start_minutes/end_minutes to request only a portion of the transcript
+    (e.g., start_minutes=0, end_minutes=30 for the first 30 minutes).
+
     Returns structured transcript with speaker diarization.
     """
     # Resolve input to get transcript path or audio source
     resolved = resolve_input(url_or_path)
 
+    def _maybe_filter(result: TranscriptResult) -> TranscriptResult:
+        if end_minutes > 0:
+            return _filter_segments_by_time(result, start_minutes, end_minutes)
+        if start_minutes > 0:
+            return _filter_segments_by_time(result, start_minutes, float("inf"))
+        return result
+
     # If we have a cached TTML transcript and not forcing transcription
     if resolved.transcript_path and not force_transcribe:
         result = parse_ttml_file(resolved.transcript_path, language=language)
-        # Add metadata
         result.episode_title = resolved.episode_title
         result.podcast_title = resolved.podcast_title
-        return result
+        return _maybe_filter(result)
 
     # For YouTube URLs, try captions first (fast path)
     if resolved.input_type == InputType.YOUTUBE_URL and not force_transcribe:
@@ -162,7 +197,7 @@ def transcribe_url(
         if caption_result:
             caption_result.episode_title = resolved.episode_title
             caption_result.podcast_title = resolved.podcast_title
-            return caption_result
+            return _maybe_filter(caption_result)
 
     # Otherwise, we need to transcribe audio
     audio_path = resolved.audio_path
@@ -195,11 +230,10 @@ def transcribe_url(
             identify_speakers=identify_speakers,
         )
 
-        # Add metadata
         result.episode_title = resolved.episode_title
         result.podcast_title = resolved.podcast_title
 
-        return result
+        return _maybe_filter(result)
     finally:
         # Clean up temp file if we downloaded it
         if temp_audio:
