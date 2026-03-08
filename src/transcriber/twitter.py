@@ -14,7 +14,7 @@ from .models import Tweet, TweetAuthor, TweetResult, TweetSearchResult
 API_BASE = "https://api.twitter.com/2"
 
 # Fields to request from the API
-TWEET_FIELDS = "created_at,public_metrics,conversation_id,in_reply_to_user_id"
+TWEET_FIELDS = "created_at,public_metrics,conversation_id,in_reply_to_user_id,note_tweet"
 USER_FIELDS = "username,name"
 EXPANSIONS = "author_id"
 
@@ -93,9 +93,13 @@ def _parse_tweet(data: dict, includes: Optional[dict] = None) -> Tweet:
     metrics = data.get("public_metrics", {})
     username = author.username if author else "unknown"
 
+    # Prefer full note_tweet text over truncated text
+    note = data.get("note_tweet", {})
+    text = note.get("text", data["text"]) if note else data["text"]
+
     return Tweet(
         id=data["id"],
-        text=data["text"],
+        text=text,
         author=author,
         created_at=data.get("created_at"),
         retweet_count=metrics.get("retweet_count"),
