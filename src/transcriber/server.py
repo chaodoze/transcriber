@@ -23,6 +23,8 @@ from .models import (
     Segment,
     TranscriptResult,
     TranscriptSource,
+    TweetResult,
+    TweetSearchResult,
 )
 from .postprocess import process_transcript
 from .transcribe import get_word_segments, transcribe_audio
@@ -35,6 +37,7 @@ mcp = FastMCP(
     instructions="""
     Transcribe podcasts and audio files with speaker diarization.
     Read EPUB ebooks chapter by chapter.
+    Fetch and search tweets from Twitter/X.
 
     Tools:
     - transcribe_url: Transcribe from Apple Podcasts URL, Overcast URL, YouTube URL, or file path
@@ -44,6 +47,9 @@ mcp = FastMCP(
     - export_transcript: Export to SRT, VTT, or text format
     - ebook_toc: Get table of contents from an EPUB file (use first to see chapters)
     - ebook_chapter: Read a specific chapter by number, index, or title
+    - get_tweet: Fetch a single tweet by URL or ID
+    - search_tweets: Search recent tweets (last 7 days)
+    - get_user_tweets: Get recent tweets from a user's timeline
     """,
 )
 
@@ -427,6 +433,70 @@ def ebook_chapter(
     from .ebook import get_chapter
 
     return get_chapter(file_path, chapter)
+
+
+@mcp.tool
+def get_tweet(
+    url_or_id: str = Field(
+        description="Tweet URL (x.com or twitter.com) or numeric tweet ID"
+    ),
+) -> TweetResult:
+    """
+    Fetch a single tweet by URL or ID.
+
+    Supports:
+    - https://x.com/user/status/1234567890
+    - https://twitter.com/user/status/1234567890
+    - 1234567890 (numeric ID)
+
+    Returns tweet text, author, timestamps, and engagement metrics.
+    """
+    from .twitter import get_tweet as _get_tweet
+
+    return _get_tweet(url_or_id)
+
+
+@mcp.tool
+def search_tweets(
+    query: str = Field(
+        description="Twitter search query (supports operators like from:, has:, -is:retweet, etc.)"
+    ),
+    max_results: int = Field(
+        default=10, description="Number of results to return (10-100)"
+    ),
+) -> TweetSearchResult:
+    """
+    Search recent tweets (last 7 days) using Twitter API v2.
+
+    Supports Twitter search operators:
+    - from:username — tweets from a specific user
+    - has:media — tweets with media
+    - -is:retweet — exclude retweets
+    - lang:en — filter by language
+
+    Returns matching tweets with text, author, and engagement metrics.
+    """
+    from .twitter import search_tweets as _search_tweets
+
+    return _search_tweets(query, max_results)
+
+
+@mcp.tool
+def get_user_tweets(
+    username: str = Field(description="Twitter username (without @)"),
+    max_results: int = Field(
+        default=10, description="Number of tweets to return (5-100)"
+    ),
+) -> TweetSearchResult:
+    """
+    Get recent tweets from a user's timeline.
+
+    Resolves the username to a user ID, then fetches their recent tweets.
+    Returns tweets with text, timestamps, and engagement metrics.
+    """
+    from .twitter import get_user_tweets as _get_user_tweets
+
+    return _get_user_tweets(username, max_results)
 
 
 def main():

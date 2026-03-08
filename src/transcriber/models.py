@@ -64,6 +64,43 @@ class EbookTocResult(BaseModel):
     total_chapters: int
 
 
+class TweetAuthor(BaseModel):
+    """Twitter/X user who authored a tweet."""
+
+    id: str
+    username: str
+    name: str
+
+
+class Tweet(BaseModel):
+    """A single tweet from Twitter/X API v2."""
+
+    id: str
+    text: str
+    author: Optional[TweetAuthor] = None
+    created_at: Optional[str] = None
+    retweet_count: Optional[int] = None
+    like_count: Optional[int] = None
+    reply_count: Optional[int] = None
+    impression_count: Optional[int] = None
+    url: Optional[str] = None
+
+
+class TweetResult(BaseModel):
+    """Result of fetching a single tweet."""
+
+    tweet: Tweet
+
+
+class TweetSearchResult(BaseModel):
+    """Result of searching or listing tweets."""
+
+    tweets: list[Tweet]
+    result_count: int
+    newest_id: Optional[str] = None
+    oldest_id: Optional[str] = None
+
+
 class EbookChapterResult(BaseModel):
     """Content of a single ebook chapter."""
 

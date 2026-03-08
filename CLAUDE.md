@@ -38,6 +38,7 @@ MCP server for podcast transcription with speaker diarization and EPUB ebook rea
 - `HF_TOKEN`: HuggingFace token for pyannote models (required)
 - `WHISPER_MODEL`: Override default model (optional)
 - `MCP_HOST`: Bind address for HTTP transport (default: `0.0.0.0`)
+- `TWITTER_BEARER_TOKEN`: Twitter/X API v2 Bearer token (required for tweet tools)
 
 ## Running the Server
 
@@ -164,3 +165,22 @@ Enables transcript fetching for ANY podcast episode without local subscription:
 - Remove `<script>` and `<style>` tags before extracting text
 - Insert paragraph breaks at block-level elements (p, div, h1-h6, blockquote, li, etc.)
 - Fallback TOC: when `book.toc` is empty, build from spine using `<h1>`-`<h3>` headings
+
+## Twitter/X API v2 Support
+
+### Architecture (twitter.py)
+- Read-only access using Bearer token authentication (no OAuth 1.0a needed)
+- HTTP via stdlib `urllib` — no new dependencies
+- Three tools: `get_tweet`, `search_tweets`, `get_user_tweets`
+- `get_user_tweets` is two-step: resolve username → user ID, then fetch timeline
+
+### API v2 Details
+- Base URL: `https://api.twitter.com/2`
+- Tweet fields: `created_at,public_metrics,conversation_id,in_reply_to_user_id`
+- Expansions: `author_id` with `username,name` user fields
+- `search/recent` only covers last 7 days (Basic tier limitation)
+- `max_results` range: 10-100 for search, 5-100 for user timeline
+
+### URL Parsing
+- Supports `x.com` and `twitter.com` URLs: `/{user}/status/{tweet_id}`
+- Pass-through for numeric tweet IDs
