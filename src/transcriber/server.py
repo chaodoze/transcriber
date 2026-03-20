@@ -33,7 +33,7 @@ from .url_resolver import InputType, resolve_input
 
 # Initialize MCP server
 mcp = FastMCP(
-    name="Podcast Transcriber",
+    name="Reader",
     instructions="""
     Transcribe podcasts and audio files with speaker diarization.
     Read EPUB ebooks chapter by chapter.

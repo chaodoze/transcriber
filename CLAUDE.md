@@ -1,4 +1,4 @@
-# Podcast Transcriber & Ebook Reader MCP Server
+# Reader MCP Server
 
 ## Project Overview
 MCP server for podcast transcription with speaker diarization and EPUB ebook reading, optimized for Apple Silicon.

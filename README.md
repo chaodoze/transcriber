@@ -1,4 +1,4 @@
-# Podcast Transcriber MCP
+# Reader MCP
 
 An MCP (Model Context Protocol) server for podcast transcription with speaker diarization, optimized for Apple Silicon.
 
