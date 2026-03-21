@@ -1,6 +1,8 @@
 """Speaker diarization module using pyannote-audio."""
 
 import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 import torch
@@ -48,10 +50,27 @@ def diarize_audio(audio_path: str | Path) -> list[dict]:
         List of dicts with: speaker, start, end
     """
     pipeline = get_pipeline()
-    audio_path = str(audio_path)
+    audio_path = Path(audio_path)
 
-    # Load audio with torchaudio to avoid torchcodec issues
-    waveform, sample_rate = torchaudio.load(audio_path)
+    # Convert non-wav files to wav (torchaudio/libsndfile can't read m4a/aac)
+    temp_wav = None
+    if audio_path.suffix.lower() not in (".wav", ".flac", ".ogg"):
+        fd, temp_path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        subprocess.run(
+            ["ffmpeg", "-i", str(audio_path), "-ar", "16000", "-ac", "1", temp_path, "-y"],
+            check=True,
+            capture_output=True,
+        )
+        temp_wav = Path(temp_path)
+        audio_path = temp_wav
+
+    try:
+        # Load audio with torchaudio to avoid torchcodec issues
+        waveform, sample_rate = torchaudio.load(str(audio_path))
+    finally:
+        if temp_wav:
+            temp_wav.unlink(missing_ok=True)
 
     # pyannote expects a dict with waveform and sample_rate
     audio_input = {"waveform": waveform, "sample_rate": sample_rate}

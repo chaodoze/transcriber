@@ -1,12 +1,21 @@
 """MCP server for podcast transcription."""
 
+import base64
 import os
+import shutil
 import sys
 import tempfile
 import time
 from collections import deque
 from pathlib import Path
 from urllib.request import urlretrieve
+
+# Ensure ffmpeg is findable when launched from minimal environments (e.g. LaunchAgents)
+if not shutil.which("ffmpeg"):
+    for p in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if Path(p, "ffmpeg").exists():
+            os.environ["PATH"] = p + ":" + os.environ.get("PATH", "")
+            break
 
 from fastmcp import FastMCP
 from pydantic import Field
@@ -44,6 +53,7 @@ mcp = FastMCP(
       (uses cached transcripts when available, falls back to speech-to-text)
     - transcribe_podcast: Full transcription with speaker diarization from audio file
     - transcribe_quick: Fast transcription without diarization
+    - transcribe_audio_data: Transcribe from base64-encoded audio (for uploaded files)
     - export_transcript: Export to SRT, VTT, or text format
     - ebook_toc: Get table of contents from an EPUB file (use first to see chapters)
     - ebook_chapter: Read a specific chapter by number, index, or title
@@ -52,6 +62,30 @@ mcp = FastMCP(
     - get_user_tweets: Get recent tweets from a user's timeline
     """,
 )
+
+
+def _convert_to_wav(audio_path: Path) -> Path | None:
+    """Convert audio to WAV if not already WAV (torchaudio can't read m4a/mp3 reliably).
+
+    Returns path to temp WAV file, or None if already WAV.
+    """
+    if audio_path.suffix.lower() == ".wav":
+        return None
+
+    import subprocess
+
+    fd, temp_path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    try:
+        subprocess.run(
+            ["ffmpeg", "-i", str(audio_path), "-ar", "16000", "-ac", "1", temp_path, "-y"],
+            check=True,
+            capture_output=True,
+        )
+        return Path(temp_path)
+    except Exception as e:
+        Path(temp_path).unlink(missing_ok=True)
+        raise RuntimeError(f"Failed to convert audio to WAV: {e}") from e
 
 
 def _download_audio(url: str) -> Path:
@@ -321,6 +355,56 @@ def transcribe_quick(
         duration=duration,
         language=transcription["language"],
     )
+
+
+@mcp.tool
+def transcribe_audio_data(
+    audio_data: str = Field(
+        description="Base64-encoded audio file content"
+    ),
+    filename: str = Field(
+        default="audio.m4a",
+        description="Original filename (used to detect format, e.g., 'recording.m4a')",
+    ),
+    language: str = Field(default="en", description="Language code (e.g., 'en', 'es', 'fr')"),
+    remove_fillers: bool = Field(default=True, description="Remove filler words (um, uh, etc.)"),
+    identify_speakers: bool = Field(
+        default=True, description="Attempt to identify speaker names from context"
+    ),
+) -> TranscriptResult:
+    """
+    Transcribe audio from base64-encoded data.
+
+    Use this when audio is provided as file content (e.g., uploaded files)
+    rather than a file path or URL. Accepts base64-encoded audio data
+    in any supported format (mp3, m4a, wav, etc.).
+
+    Returns structured transcript with speaker diarization.
+    """
+    # Decode base64 audio data
+    try:
+        audio_bytes = base64.b64decode(audio_data)
+    except Exception as e:
+        raise ValueError(f"Invalid base64 audio data: {e}") from e
+
+    # Determine extension from filename
+    ext = Path(filename).suffix or ".m4a"
+
+    # Write to temp file
+    fd, temp_path = tempfile.mkstemp(suffix=ext)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(audio_bytes)
+
+        result = _transcribe_audio_file(
+            Path(temp_path),
+            language=language,
+            remove_fillers=remove_fillers,
+            identify_speakers=identify_speakers,
+        )
+        return result
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
 
 
 @mcp.tool
