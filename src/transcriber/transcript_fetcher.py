@@ -1,5 +1,6 @@
 """Fetch Apple Podcasts transcripts via native helper tool."""
 
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -52,24 +53,37 @@ def fetch_transcript(
         cmd.append("--cache-bearer-token")
 
     try:
+        # Run via /usr/bin/python3 + os.system() wrapper to avoid macOS ObjC fork
+        # safety crash. When pyannote/torch is loaded, forked children inherit ObjC
+        # runtime state, causing FetchTranscript (which uses CoreFoundation for Apple
+        # API auth) to crash with "NSDateFormatter initialize in progress when fork()
+        # was called". Spawning a clean Python that calls os.system() avoids this
+        # because os.system() uses the C library system() which handles fork+exec
+        # safely from a clean process.
+        shell_cmd = shlex.join(cmd)
         result = subprocess.run(
-            cmd,
+            ["/usr/bin/python3", "-c",
+             "import os, sys; sys.exit(os.system(sys.argv[1]) >> 8)",
+             shell_cmd],
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=str(TOOLS_DIR),  # Run from tools dir so bearer_token.txt is cached there
         )
 
         if result.returncode != 0:
-            # Log error but don't raise - caller should fall back to STT
             return None
 
         # Output is the path to the downloaded file
         output_path = result.stdout.strip()
-        if output_path:
-            path = Path(output_path)
-            if path.exists():
-                return path
+        if not output_path:
+            return None
+
+        path = Path(output_path)
+        if not path.is_absolute():
+            path = TOOLS_DIR / path
+
+        if path.exists():
+            return path
 
         return None
 

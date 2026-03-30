@@ -8,7 +8,7 @@ import tempfile
 import time
 from collections import deque
 from pathlib import Path
-from urllib.request import urlretrieve
+from urllib.request import Request, urlopen
 
 # Ensure ffmpeg is findable when launched from minimal environments (e.g. LaunchAgents)
 if not shutil.which("ffmpeg"):
@@ -49,17 +49,14 @@ mcp = FastMCP(
     Fetch and search tweets from Twitter/X.
 
     Tools:
-    - transcribe_url: Transcribe from Apple Podcasts URL, Overcast URL, YouTube URL, or file path
-      (uses cached transcripts when available, falls back to speech-to-text)
-    - transcribe_podcast: Full transcription with speaker diarization from audio file
-    - transcribe_quick: Fast transcription without diarization
-    - transcribe_audio_data: Transcribe from base64-encoded audio (for uploaded files)
-    - export_transcript: Export to SRT, VTT, or text format
-    - ebook_toc: Get table of contents from an EPUB file (use first to see chapters)
-    - ebook_chapter: Read a specific chapter by number, index, or title
-    - get_tweet: Fetch a single tweet by URL or ID
-    - search_tweets: Search recent tweets (last 7 days)
-    - get_user_tweets: Get recent tweets from a user's timeline
+    - transcribe: Transcribe audio from URL (Apple Podcasts, Overcast, YouTube),
+      file path, or base64 data. Modes: "auto" (use cached transcripts),
+      "full" (force STT with diarization), "quick" (fast, no diarization).
+      Can export directly to txt/srt/vtt via output_format parameter.
+    - ebook: Read EPUB ebooks. Pass file_path alone to get table of contents,
+      or with chapter parameter to read a specific chapter.
+    - tweet: Interact with Twitter/X. Actions: "get" (single tweet by URL/ID),
+      "search" (search recent tweets), "user" (user timeline).
     """,
 )
 
@@ -99,8 +96,11 @@ def _download_audio(url: str) -> Path:
 
     # Create temp file
     fd, temp_path = tempfile.mkstemp(suffix=ext)
+    os.close(fd)
     try:
-        urlretrieve(url, temp_path)
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(req, timeout=300) as resp, open(temp_path, "wb") as f:
+            shutil.copyfileobj(resp, f)
         return Path(temp_path)
     except Exception as e:
         Path(temp_path).unlink(missing_ok=True)
@@ -175,18 +175,65 @@ def _filter_segments_by_time(
     )
 
 
+def _decode_base64_to_temp(audio_data: str, filename: str) -> tuple[Path, Path]:
+    """Decode base64 audio data to a temporary file. Returns (path, path_to_cleanup)."""
+    try:
+        audio_bytes = base64.b64decode(audio_data)
+    except Exception as e:
+        raise ValueError(f"Invalid base64 audio data: {e}") from e
+
+    ext = Path(filename).suffix or ".m4a"
+    fd, temp_path = tempfile.mkstemp(suffix=ext)
+    with os.fdopen(fd, "wb") as f:
+        f.write(audio_bytes)
+    return Path(temp_path), Path(temp_path)
+
+
+def _maybe_export(result: TranscriptResult, output_format: str) -> TranscriptResult | str:
+    """If output_format is not 'json', export the transcript to the requested format."""
+    if output_format == "json":
+        return result
+    segments = [seg.model_dump() for seg in result.segments]
+    if output_format == "txt":
+        return _export_txt(segments)
+    elif output_format == "srt":
+        return _export_srt(segments)
+    elif output_format == "vtt":
+        return _export_vtt(segments)
+    raise ValueError(
+        f"Unknown output_format: {output_format!r}. Use 'json', 'txt', 'srt', or 'vtt'."
+    )
+
+
 @mcp.tool
-def transcribe_url(
-    url_or_path: str = Field(
-        description="Apple Podcasts URL, Overcast URL, YouTube URL, or local file path"
+def transcribe(
+    input: str = Field(
+        description=(
+            "Audio source: Apple Podcasts URL, Overcast URL, YouTube URL, "
+            "local file path, or base64-encoded audio data"
+        )
     ),
-    language: str = Field(default="en", description="Language code (e.g., 'en', 'es', 'fr')"),
+    input_filename: str = Field(
+        default="",
+        description=(
+            "Original filename when input is base64 data (e.g., 'recording.m4a'). "
+            "When set, signals that input contains base64-encoded audio."
+        ),
+    ),
+    mode: str = Field(
+        default="auto",
+        description=(
+            "Transcription mode: 'auto' (use cached transcripts when available), "
+            "'full' (force speech-to-text with speaker diarization), "
+            "'quick' (fast transcription without diarization)"
+        ),
+    ),
+    language: str = Field(
+        default="en", description="Language code (e.g., 'en', 'es', 'fr', 'auto')"
+    ),
     remove_fillers: bool = Field(default=True, description="Remove filler words (um, uh, etc.)"),
     identify_speakers: bool = Field(
-        default=True, description="Attempt to identify speaker names from context"
-    ),
-    force_transcribe: bool = Field(
-        default=False, description="Force speech-to-text even if cached transcript available"
+        default=True, description="Identify speaker names from context (ignored in quick mode)"
     ),
     start_minutes: float = Field(
         default=0, description="Start time in minutes (default: 0, beginning)"
@@ -194,26 +241,100 @@ def transcribe_url(
     end_minutes: float = Field(
         default=0, description="End time in minutes (default: 0, meaning entire transcript)"
     ),
-) -> TranscriptResult:
+    output_format: str = Field(
+        default="json",
+        description="Output format: 'json' (structured result), 'txt', 'srt', or 'vtt'",
+    ),
+) -> TranscriptResult | QuickTranscriptResult | str:
     """
-    Transcribe a podcast from URL or file path.
+    Transcribe audio from a URL, file path, or base64-encoded data.
 
-    Supports:
-    - Apple Podcasts URLs: Uses cached transcript if available, falls back to STT
-    - Overcast URLs: Looks up in Apple Podcasts cache, falls back to STT
-    - YouTube URLs: Uses YouTube captions if available, falls back to STT
-    - Local file paths: Direct transcription
-
-    The tool automatically uses cached transcripts/captions when available,
-    which is much faster than speech-to-text transcription.
-
-    Use start_minutes/end_minutes to request only a portion of the transcript
-    (e.g., start_minutes=0, end_minutes=30 for the first 30 minutes).
-
-    Returns structured transcript with speaker diarization.
+    Modes:
+    - "auto": Uses cached transcripts/captions when available (fastest), falls back to STT
+    - "full": Forces speech-to-text with full speaker diarization
+    - "quick": Fast transcription without speaker diarization
     """
-    # Resolve input to get transcript path or audio source
-    resolved = resolve_input(url_or_path)
+    if mode not in ("auto", "full", "quick"):
+        raise ValueError(f"Unknown mode: {mode!r}. Use 'auto', 'full', or 'quick'.")
+
+    if output_format not in ("json", "txt", "srt", "vtt"):
+        raise ValueError(
+            f"Unknown output_format: {output_format!r}. Use 'json', 'txt', 'srt', or 'vtt'."
+        )
+
+    # --- Quick mode (no diarization) ---
+    if mode == "quick":
+        if input_filename:
+            audio_path, cleanup = _decode_base64_to_temp(input, input_filename)
+        else:
+            audio_path = Path(input).expanduser().resolve()
+            cleanup = None
+
+        try:
+            if not audio_path.exists():
+                raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+            transcription = transcribe_audio(
+                audio_path,
+                language=language if language != "auto" else None,
+                word_timestamps=False,
+            )
+
+            text = transcription["text"]
+            if remove_fillers:
+                from .postprocess import remove_fillers_from_text
+
+                text = remove_fillers_from_text(text)
+
+            segments = transcription.get("segments", [])
+            duration = segments[-1]["end"] if segments else 0.0
+
+            result = QuickTranscriptResult(
+                text=text,
+                segments=segments,
+                duration=duration,
+                language=transcription["language"],
+            )
+
+            if output_format != "json":
+                return text
+
+            return result
+        finally:
+            if cleanup:
+                cleanup.unlink(missing_ok=True)
+
+    # --- Base64 input ---
+    if input_filename:
+        audio_path, cleanup = _decode_base64_to_temp(input, input_filename)
+        try:
+            result = _transcribe_audio_file(
+                audio_path,
+                language=language,
+                remove_fillers=remove_fillers,
+                identify_speakers=identify_speakers,
+            )
+            return _maybe_export(result, output_format)
+        finally:
+            cleanup.unlink(missing_ok=True)
+
+    # --- URL or file path (auto/full mode) ---
+    force_transcribe = mode == "full"
+
+    # For file paths without URL scheme, go directly to STT
+    if not input.startswith(("http://", "https://")):
+        path = Path(input).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"Audio file not found: {path}")
+        result = _transcribe_audio_file(
+            path,
+            language=language,
+            remove_fillers=remove_fillers,
+            identify_speakers=identify_speakers,
+        )
+        return _maybe_export(result, output_format)
+
+    resolved = resolve_input(input)
 
     def _maybe_filter(result: TranscriptResult) -> TranscriptResult:
         if end_minutes > 0:
@@ -227,7 +348,7 @@ def transcribe_url(
         result = parse_ttml_file(resolved.transcript_path, language=language)
         result.episode_title = resolved.episode_title
         result.podcast_title = resolved.podcast_title
-        return _maybe_filter(result)
+        return _maybe_export(_maybe_filter(result), output_format)
 
     # For YouTube URLs, try captions first (fast path)
     if resolved.input_type == InputType.YOUTUBE_URL and not force_transcribe:
@@ -237,14 +358,13 @@ def transcribe_url(
         if caption_result:
             caption_result.episode_title = resolved.episode_title
             caption_result.podcast_title = resolved.podcast_title
-            return _maybe_filter(caption_result)
+            return _maybe_export(_maybe_filter(caption_result), output_format)
 
     # Otherwise, we need to transcribe audio
     audio_path = resolved.audio_path
     temp_audio = None
 
     if not audio_path:
-        # For YouTube, download audio via yt-dlp
         if resolved.input_type == InputType.YOUTUBE_URL:
             from .youtube import download_youtube_audio
 
@@ -252,7 +372,7 @@ def transcribe_url(
             temp_audio = audio_path
         elif not resolved.audio_url:
             raise ValueError(
-                f"Could not find audio source for: {url_or_path}. "
+                f"Could not find audio source for: {input}. "
                 "Episode may not be downloaded in Apple Podcasts."
             )
         else:
@@ -269,167 +389,13 @@ def transcribe_url(
             remove_fillers=remove_fillers,
             identify_speakers=identify_speakers,
         )
-
         result.episode_title = resolved.episode_title
         result.podcast_title = resolved.podcast_title
 
-        return _maybe_filter(result)
+        return _maybe_export(_maybe_filter(result), output_format)
     finally:
-        # Clean up temp file if we downloaded it
         if temp_audio:
             temp_audio.unlink(missing_ok=True)
-
-
-@mcp.tool
-def transcribe_podcast(
-    audio_path: str = Field(description="Path to audio file (mp3, wav, m4a, etc.)"),
-    language: str = Field(default="en", description="Language code (e.g., 'en', 'es', 'fr')"),
-    remove_fillers: bool = Field(default=True, description="Remove filler words (um, uh, etc.)"),
-    identify_speakers: bool = Field(
-        default=True, description="Attempt to identify speaker names from context"
-    ),
-) -> TranscriptResult:
-    """
-    Transcribe a podcast with full speaker diarization.
-
-    This performs:
-    1. Speech-to-text transcription with word timestamps
-    2. Speaker diarization to identify who said what
-    3. Optional filler word removal
-    4. Optional speaker name identification
-
-    Returns structured transcript with segments labeled by speaker.
-    """
-    path = Path(audio_path).expanduser().resolve()
-
-    if not path.exists():
-        raise FileNotFoundError(f"Audio file not found: {path}")
-
-    return _transcribe_audio_file(
-        path,
-        language=language,
-        remove_fillers=remove_fillers,
-        identify_speakers=identify_speakers,
-    )
-
-
-@mcp.tool
-def transcribe_quick(
-    audio_path: str = Field(description="Path to audio file"),
-    language: str = Field(default="en", description="Language code"),
-    remove_fillers: bool = Field(default=True, description="Remove filler words"),
-) -> QuickTranscriptResult:
-    """
-    Fast transcription without speaker diarization.
-
-    Use this when you don't need to know who said what, just the text.
-    Much faster than full transcription.
-    """
-    audio_path = Path(audio_path).expanduser().resolve()
-
-    if not audio_path.exists():
-        raise FileNotFoundError(f"Audio file not found: {audio_path}")
-
-    # Transcribe without word timestamps for speed
-    transcription = transcribe_audio(
-        audio_path,
-        language=language if language != "auto" else None,
-        word_timestamps=False,
-    )
-
-    text = transcription["text"]
-
-    # Optionally remove fillers
-    if remove_fillers:
-        from .postprocess import remove_fillers_from_text
-
-        text = remove_fillers_from_text(text)
-
-    # Calculate duration from segments
-    segments = transcription.get("segments", [])
-    duration = segments[-1]["end"] if segments else 0.0
-
-    return QuickTranscriptResult(
-        text=text,
-        segments=segments,
-        duration=duration,
-        language=transcription["language"],
-    )
-
-
-@mcp.tool
-def transcribe_audio_data(
-    audio_data: str = Field(
-        description="Base64-encoded audio file content"
-    ),
-    filename: str = Field(
-        default="audio.m4a",
-        description="Original filename (used to detect format, e.g., 'recording.m4a')",
-    ),
-    language: str = Field(default="en", description="Language code (e.g., 'en', 'es', 'fr')"),
-    remove_fillers: bool = Field(default=True, description="Remove filler words (um, uh, etc.)"),
-    identify_speakers: bool = Field(
-        default=True, description="Attempt to identify speaker names from context"
-    ),
-) -> TranscriptResult:
-    """
-    Transcribe audio from base64-encoded data.
-
-    Use this when audio is provided as file content (e.g., uploaded files)
-    rather than a file path or URL. Accepts base64-encoded audio data
-    in any supported format (mp3, m4a, wav, etc.).
-
-    Returns structured transcript with speaker diarization.
-    """
-    # Decode base64 audio data
-    try:
-        audio_bytes = base64.b64decode(audio_data)
-    except Exception as e:
-        raise ValueError(f"Invalid base64 audio data: {e}") from e
-
-    # Determine extension from filename
-    ext = Path(filename).suffix or ".m4a"
-
-    # Write to temp file
-    fd, temp_path = tempfile.mkstemp(suffix=ext)
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(audio_bytes)
-
-        result = _transcribe_audio_file(
-            Path(temp_path),
-            language=language,
-            remove_fillers=remove_fillers,
-            identify_speakers=identify_speakers,
-        )
-        return result
-    finally:
-        Path(temp_path).unlink(missing_ok=True)
-
-
-@mcp.tool
-def export_transcript(
-    transcript: dict = Field(description="Transcript result from transcribe_podcast"),
-    format: str = Field(default="txt", description="Output format: 'txt', 'srt', or 'vtt'"),
-) -> str:
-    """
-    Export transcript to different formats.
-
-    Formats:
-    - txt: Plain text with speaker labels
-    - srt: SubRip subtitle format
-    - vtt: WebVTT subtitle format
-    """
-    segments = transcript.get("segments", [])
-
-    if format == "txt":
-        return _export_txt(segments)
-    elif format == "srt":
-        return _export_srt(segments)
-    elif format == "vtt":
-        return _export_vtt(segments)
-    else:
-        raise ValueError(f"Unknown format: {format}. Use 'txt', 'srt', or 'vtt'")
 
 
 def _format_timestamp_srt(seconds: float) -> str:
@@ -485,102 +451,70 @@ def _export_vtt(segments: list) -> str:
 
 
 @mcp.tool
-def ebook_toc(
-    file_path: str = Field(description="Path to an EPUB file"),
-) -> EbookTocResult:
-    """
-    Get the table of contents of an EPUB ebook.
-
-    Use this first to see the book's structure, then use ebook_chapter
-    to read a specific chapter by its number, index, or title.
-    """
-    from .ebook import get_toc
-
-    return get_toc(file_path)
-
-
-@mcp.tool
-def ebook_chapter(
+def ebook(
     file_path: str = Field(description="Path to an EPUB file"),
     chapter: str = Field(
+        default="",
         description=(
-            "Chapter to read. Can be a hierarchical number (e.g., '3.1'), "
-            "an index (e.g., '0'), or a title substring (e.g., 'Introduction')"
+            "Chapter to read: hierarchical number ('3.1'), index ('0'), "
+            "or title substring ('Introduction'). Leave empty to get table of contents."
+        ),
+    ),
+) -> EbookTocResult | EbookChapterResult:
+    """
+    Read an EPUB ebook.
+
+    Without chapter: returns the table of contents (use first to see structure).
+    With chapter: returns the content of a specific chapter.
+    """
+    if chapter:
+        from .ebook import get_chapter
+
+        return get_chapter(file_path, chapter)
+    else:
+        from .ebook import get_toc
+
+        return get_toc(file_path)
+
+
+@mcp.tool
+def tweet(
+    action: str = Field(
+        description="Action: 'get' (single tweet), 'search' (search recent), 'user' (user timeline)"
+    ),
+    query: str = Field(
+        description=(
+            "Tweet URL/ID for 'get', search query for 'search', "
+            "username (without @) for 'user'"
         )
     ),
-) -> EbookChapterResult:
-    """
-    Read a specific chapter from an EPUB ebook.
-
-    Use ebook_toc first to see available chapters and their numbers/indices.
-    """
-    from .ebook import get_chapter
-
-    return get_chapter(file_path, chapter)
-
-
-@mcp.tool
-def get_tweet(
-    url_or_id: str = Field(
-        description="Tweet URL (x.com or twitter.com) or numeric tweet ID"
-    ),
-) -> TweetResult:
-    """
-    Fetch a single tweet by URL or ID.
-
-    Supports:
-    - https://x.com/user/status/1234567890
-    - https://twitter.com/user/status/1234567890
-    - 1234567890 (numeric ID)
-
-    Returns tweet text, author, timestamps, and engagement metrics.
-    """
-    from .twitter import get_tweet as _get_tweet
-
-    return _get_tweet(url_or_id)
-
-
-@mcp.tool
-def search_tweets(
-    query: str = Field(
-        description="Twitter search query (supports operators like from:, has:, -is:retweet, etc.)"
-    ),
     max_results: int = Field(
-        default=10, description="Number of results to return (10-100)"
+        default=10,
+        description="Results count for 'search' (10-100) and 'user' (5-100). Ignored for 'get'.",
     ),
-) -> TweetSearchResult:
+) -> TweetResult | TweetSearchResult:
     """
-    Search recent tweets (last 7 days) using Twitter API v2.
+    Fetch tweets from Twitter/X.
 
-    Supports Twitter search operators:
-    - from:username — tweets from a specific user
-    - has:media — tweets with media
-    - -is:retweet — exclude retweets
-    - lang:en — filter by language
-
-    Returns matching tweets with text, author, and engagement metrics.
+    Actions:
+    - "get": Fetch a single tweet by URL or numeric ID
+    - "search": Search recent tweets (last 7 days)
+    - "user": Get recent tweets from a user's timeline
     """
-    from .twitter import search_tweets as _search_tweets
+    if action == "get":
+        from .twitter import get_tweet as _get_tweet
 
-    return _search_tweets(query, max_results)
+        return _get_tweet(query)
+    elif action == "search":
+        from .twitter import search_tweets as _search_tweets
 
+        return _search_tweets(query, max_results)
+    elif action == "user":
+        from .twitter import get_user_tweets as _get_user_tweets
 
-@mcp.tool
-def get_user_tweets(
-    username: str = Field(description="Twitter username (without @)"),
-    max_results: int = Field(
-        default=10, description="Number of tweets to return (5-100)"
-    ),
-) -> TweetSearchResult:
-    """
-    Get recent tweets from a user's timeline.
-
-    Resolves the username to a user ID, then fetches their recent tweets.
-    Returns tweets with text, timestamps, and engagement metrics.
-    """
-    from .twitter import get_user_tweets as _get_user_tweets
-
-    return _get_user_tweets(username, max_results)
+        return _get_user_tweets(query, max_results)
+    else:
+        raise ValueError(f"Unknown action: {action!r}. Use 'get', 'search', or 'user'.")
 
 
 def main():

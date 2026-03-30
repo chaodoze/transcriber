@@ -126,8 +126,8 @@ def resolve_overcast_url(url: str) -> ResolvedInput:
     # Extract metadata
     episode_title, podcast_title = extract_episode_metadata(page_html)
 
-    # Extract audio URL from Overcast (fallback for STT)
-    overcast_audio_url = extract_audio_url(page_html)
+    # Note: Overcast loads audio via JavaScript, so static HTML never contains
+    # <audio>/<source> tags. We rely entirely on Apple Podcasts / iTunes API.
 
     transcript_path = None
     apple_audio_url = None
@@ -159,8 +159,7 @@ def resolve_overcast_url(url: str) -> ResolvedInput:
             if not apple_audio_url and itunes_episode.audio_url:
                 apple_audio_url = itunes_episode.audio_url
 
-    # Prefer Apple's audio URL if available (usually better quality)
-    audio_url = apple_audio_url or overcast_audio_url
+    audio_url = apple_audio_url
 
     return ResolvedInput(
         input_type=InputType.OVERCAST_URL,
