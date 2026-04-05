@@ -14,9 +14,13 @@ from .models import Tweet, TweetAuthor, TweetResult, TweetSearchResult
 API_BASE = "https://api.twitter.com/2"
 
 # Fields to request from the API
-TWEET_FIELDS = "created_at,public_metrics,conversation_id,in_reply_to_user_id,note_tweet"
+TWEET_FIELDS = (
+    "created_at,public_metrics,conversation_id,"
+    "in_reply_to_user_id,note_tweet,referenced_tweets"
+)
 USER_FIELDS = "username,name"
-EXPANSIONS = "author_id"
+EXPANSIONS = "author_id,attachments.media_keys"
+MEDIA_FIELDS = "url,preview_image_url,type,variants,alt_text"
 
 
 def parse_tweet_url(url_or_id: str) -> str:
@@ -75,6 +79,37 @@ def _bearer_request(endpoint: str, params: Optional[dict] = None) -> dict:
         raise RuntimeError(f"Twitter API request failed: {e}") from e
 
 
+def _resolve_media_urls(data: dict, includes: Optional[dict] = None) -> tuple[list[str], list[str]]:
+    """Extract image and video URLs from tweet attachments via includes.media."""
+    image_urls: list[str] = []
+    video_urls: list[str] = []
+    if not includes:
+        return image_urls, video_urls
+
+    media_keys = data.get("attachments", {}).get("media_keys", [])
+    if not media_keys:
+        return image_urls, video_urls
+
+    media_lookup = {m["media_key"]: m for m in includes.get("media", [])}
+    for key in media_keys:
+        media = media_lookup.get(key)
+        if not media:
+            continue
+        media_type = media.get("type")
+        if media_type == "photo":
+            url = media.get("url")
+            if url:
+                image_urls.append(url)
+        elif media_type in ("video", "animated_gif"):
+            variants = media.get("variants", [])
+            mp4s = [v for v in variants if v.get("content_type") == "video/mp4"]
+            if mp4s:
+                best = max(mp4s, key=lambda v: v.get("bit_rate", 0))
+                video_urls.append(best["url"])
+
+    return image_urls, video_urls
+
+
 def _parse_tweet(data: dict, includes: Optional[dict] = None) -> Tweet:
     """Convert an API v2 tweet object into a Tweet model."""
     # Resolve author from includes
@@ -97,6 +132,8 @@ def _parse_tweet(data: dict, includes: Optional[dict] = None) -> Tweet:
     note = data.get("note_tweet", {})
     text = note.get("text", data["text"]) if note else data["text"]
 
+    image_urls, video_urls = _resolve_media_urls(data, includes)
+
     return Tweet(
         id=data["id"],
         text=text,
@@ -107,6 +144,8 @@ def _parse_tweet(data: dict, includes: Optional[dict] = None) -> Tweet:
         reply_count=metrics.get("reply_count"),
         impression_count=metrics.get("impression_count"),
         url=f"https://x.com/{username}/status/{data['id']}",
+        image_urls=image_urls,
+        video_urls=video_urls,
     )
 
 
@@ -127,6 +166,7 @@ def get_tweet(url_or_id: str) -> TweetResult:
             "tweet.fields": TWEET_FIELDS,
             "expansions": EXPANSIONS,
             "user.fields": USER_FIELDS,
+            "media.fields": MEDIA_FIELDS,
         },
     )
 
@@ -136,6 +176,28 @@ def get_tweet(url_or_id: str) -> TweetResult:
         raise RuntimeError(msg)
 
     tweet = _parse_tweet(resp["data"], resp.get("includes"))
+
+    # If this tweet is a reply, fetch the parent tweet (one level only)
+    for ref in resp["data"].get("referenced_tweets", []):
+        if ref.get("type") == "replied_to":
+            try:
+                parent_resp = _bearer_request(
+                    f"tweets/{ref['id']}",
+                    {
+                        "tweet.fields": TWEET_FIELDS,
+                        "expansions": EXPANSIONS,
+                        "user.fields": USER_FIELDS,
+                        "media.fields": MEDIA_FIELDS,
+                    },
+                )
+                if "data" in parent_resp:
+                    tweet.replied_to = _parse_tweet(
+                        parent_resp["data"], parent_resp.get("includes")
+                    )
+            except RuntimeError:
+                pass  # Parent tweet may be deleted or inaccessible
+            break
+
     return TweetResult(tweet=tweet)
 
 
@@ -159,6 +221,7 @@ def search_tweets(query: str, max_results: int = 10) -> TweetSearchResult:
             "tweet.fields": TWEET_FIELDS,
             "expansions": EXPANSIONS,
             "user.fields": USER_FIELDS,
+            "media.fields": MEDIA_FIELDS,
         },
     )
 
@@ -208,6 +271,7 @@ def get_user_tweets(username: str, max_results: int = 10) -> TweetSearchResult:
             "tweet.fields": TWEET_FIELDS,
             "expansions": EXPANSIONS,
             "user.fields": USER_FIELDS,
+            "media.fields": MEDIA_FIELDS,
         },
     )
 

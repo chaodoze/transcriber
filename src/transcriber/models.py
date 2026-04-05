@@ -84,6 +84,9 @@ class Tweet(BaseModel):
     reply_count: Optional[int] = None
     impression_count: Optional[int] = None
     url: Optional[str] = None
+    replied_to: Optional["Tweet"] = None
+    image_urls: list[str] = []
+    video_urls: list[str] = []
 
 
 class TweetResult(BaseModel):

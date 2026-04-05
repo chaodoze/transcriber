@@ -126,12 +126,30 @@ Enables transcript fetching for ANY podcast episode without local subscription:
 - Used as fallback when episode not in local Apple Podcasts database
 - Overcast URL workflow: parse title from page → search iTunes → fetch transcript
 
+## Instagram Reel/Post Support
+
+### Architecture (instagram.py)
+- Audio download via `yt-dlp` with Chrome cookies → existing STT pipeline
+- Requires `cookiesfrombrowser: ('chrome',)` — Instagram rejects unauthenticated requests
+- URL patterns: `instagram.com/reel/{shortcode}`, `instagram.com/reels/{shortcode}`, `instagram.com/p/{shortcode}`
+- Metadata (title, uploader) fetched via yt-dlp `extract_info` without download
+
+### Authentication
+- Instagram requires login cookies — even public reels return empty responses without them
+- yt-dlp extracts and decrypts cookies from Chrome via macOS Keychain automatically
+- Sessions can expire; user must be logged into Instagram in Chrome
+
+### Limitations
+- `instagram:user` extractor is currently broken in yt-dlp (individual reels/posts work)
+- Instagram aggressively rate-limits and may flag accounts used for scraping
+- Only works on the local machine (needs Chrome cookies) — not available via remote HTTP transport
+
 ## YouTube Transcript Support
 
 ### Architecture (youtube.py)
 - Fast path: fetch captions via `youtube-transcript-api` (instant, no diarization)
 - Fallback: download audio via `yt-dlp` → existing STT pipeline (slow, with diarization)
-- Use `force_transcribe=True` to skip captions and get speaker-labeled STT
+- Use `mode="full"` to skip captions and get speaker-labeled STT
 
 ### youtube-transcript-api (v1.x)
 - Instance-based API: `YouTubeTranscriptApi()` then `.fetch(video_id, languages=[...])`
@@ -148,7 +166,7 @@ Enables transcript fetching for ANY podcast episode without local subscription:
 ## EPUB Ebook Support
 
 ### Architecture (ebook.py)
-- Two tools: `ebook_toc` (get structure) and `ebook_chapter` (read one chapter)
+- Single `ebook` tool: no chapter param = TOC, with chapter param = read content
 - Designed for LLM conversations about books — fetch only the chapter being discussed
 - Chapter lookup supports hierarchical numbers ("3.1"), flat indices ("0"), or title substrings
 
@@ -171,8 +189,8 @@ Enables transcript fetching for ANY podcast episode without local subscription:
 ### Architecture (twitter.py)
 - Read-only access using Bearer token authentication (no OAuth 1.0a needed)
 - HTTP via stdlib `urllib` — no new dependencies
-- Three tools: `get_tweet`, `search_tweets`, `get_user_tweets`
-- `get_user_tweets` is two-step: resolve username → user ID, then fetch timeline
+- Single `tweet` tool with action parameter: "get", "search", "user"
+- "user" action is two-step: resolve username → user ID, then fetch timeline
 
 ### API v2 Details
 - Base URL: `https://api.twitter.com/2`

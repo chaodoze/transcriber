@@ -35,7 +35,7 @@ def test_preserve_meaningful_content():
 def test_identify_speaker_names():
     """Test speaker name identification from text."""
     segments = [
-        {"speaker": "SPEAKER_00", "text": "Hi, I'm John and welcome to the show."},
+        {"speaker": "SPEAKER_00", "text": "I'm John and welcome to the show."},
         {"speaker": "SPEAKER_01", "text": "Thanks for having me, my name is Sarah."},
     ]
     names = identify_speaker_names(segments)

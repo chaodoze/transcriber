@@ -49,7 +49,7 @@ mcp = FastMCP(
     Fetch and search tweets from Twitter/X.
 
     Tools:
-    - transcribe: Transcribe audio from URL (Apple Podcasts, Overcast, YouTube),
+    - transcribe: Transcribe audio from URL (Apple Podcasts, Overcast, YouTube, Instagram),
       file path, or base64 data. Modes: "auto" (use cached transcripts),
       "full" (force STT with diarization), "quick" (fast, no diarization).
       Can export directly to txt/srt/vtt via output_format parameter.
@@ -210,7 +210,7 @@ def transcribe(
     input: str = Field(
         description=(
             "Audio source: Apple Podcasts URL, Overcast URL, YouTube URL, "
-            "local file path, or base64-encoded audio data"
+            "Instagram reel/post URL, local file path, or base64-encoded audio data"
         )
     ),
     input_filename: str = Field(
@@ -369,6 +369,11 @@ def transcribe(
             from .youtube import download_youtube_audio
 
             audio_path = download_youtube_audio(resolved.episode_id)
+            temp_audio = audio_path
+        elif resolved.input_type == InputType.INSTAGRAM_URL:
+            from .instagram import download_instagram_audio
+
+            audio_path = download_instagram_audio(resolved.episode_id)
             temp_audio = audio_path
         elif not resolved.audio_url:
             raise ValueError(

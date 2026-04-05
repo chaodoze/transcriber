@@ -13,6 +13,7 @@ class InputType(Enum):
     APPLE_PODCASTS_URL = "apple_podcasts"
     OVERCAST_URL = "overcast"
     YOUTUBE_URL = "youtube"
+    INSTAGRAM_URL = "instagram"
     FILE_PATH = "file_path"
 
 
@@ -43,6 +44,10 @@ YOUTUBE_PATTERN = re.compile(
     r"(?P<video_id>[a-zA-Z0-9_-]{11})"
 )
 
+INSTAGRAM_PATTERN = re.compile(
+    r"instagram\.com/(?:reel|reels|p)/(?P<shortcode>[a-zA-Z0-9_-]+)"
+)
+
 
 def detect_input_type(url_or_path: str) -> InputType:
     """Detect whether input is Apple Podcasts URL, Overcast URL, or file path."""
@@ -56,6 +61,9 @@ def detect_input_type(url_or_path: str) -> InputType:
 
     if YOUTUBE_PATTERN.search(url_or_path):
         return InputType.YOUTUBE_URL
+
+    if INSTAGRAM_PATTERN.search(url_or_path):
+        return InputType.INSTAGRAM_URL
 
     return InputType.FILE_PATH
 
@@ -94,6 +102,14 @@ def parse_youtube_url(url: str) -> Optional[str]:
     return match.group("video_id")
 
 
+def parse_instagram_url(url: str) -> Optional[str]:
+    """Parse Instagram URL and return shortcode."""
+    match = INSTAGRAM_PATTERN.search(url)
+    if not match:
+        return None
+    return match.group("shortcode")
+
+
 def resolve_input(url_or_path: str) -> ResolvedInput:
     """
     Resolve input to audio/transcript paths.
@@ -125,5 +141,10 @@ def resolve_input(url_or_path: str) -> ResolvedInput:
         from .youtube import resolve_youtube_url
 
         return resolve_youtube_url(url_or_path)
+
+    if input_type == InputType.INSTAGRAM_URL:
+        from .instagram import resolve_instagram_url
+
+        return resolve_instagram_url(url_or_path)
 
     return ResolvedInput(input_type=input_type)
